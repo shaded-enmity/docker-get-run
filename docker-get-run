@@ -53,7 +53,7 @@ class CommandBuilder:
 
     def emit_cap_drop(self, caps):
         for cap in caps:
-            self._state += ['--cap-add', cap]
+            self._state += ['--cap-drop', cap]
 
     def emit_port_bindings(self, bindings):
         for cp, data in bindings.items():
@@ -95,6 +95,12 @@ class CommandBuilder:
         for e in (set(env) - default):
             self._state += ['-e', e]
 
+    def emit_hostname(self, hostname):
+        self._state += ['-h', hostname]
+
+    def emit_name(self, name):
+        self._state += ['--name', name[1:]]
+
     def emit_image(self, image):
         self._image = image
 
@@ -120,6 +126,7 @@ builder.emit_privileged(get_value(data, 'HostConfig.Privileged', False))
 builder.emit_cmd(get_value(data, 'Config.Cmd', ''))
 builder.emit_volume(get_value(data, 'HostConfig.Binds', []))
 builder.emit_cap_add(get_value(data, 'HostConfig.CapAdd', []))
+builder.emit_cap_drop(get_value(data, 'HostConfig.CapDrop', []))
 builder.emit_port_bindings(get_value(data, 'HostConfig.PortBindings', {}))
 builder.emit_image(get_value(data, 'Config.Image', ''))
 if get_value(data, 'Config.Tty'):
@@ -137,5 +144,12 @@ else:
 builder.emit_links(get_value(data, 'HostConfig.Links', []))
 builder.emit_memory(get_value(data, 'HostConfig.Memory', 0))
 builder.emit_env(get_value(data, 'Image', ''), get_value(data, 'Config.Env', []))
+
+container_id = get_value(data, 'Id', '')
+hostname = get_value(data, 'Config.Hostname', '')
+if hostname not in container_id:
+    builder.emit_hostname(hostname)
+
+builder.emit_name(get_value(data, 'Name'))
 
 print(builder.build())

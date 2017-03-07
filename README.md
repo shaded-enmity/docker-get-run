@@ -39,6 +39,8 @@ docker run -v /opt/testmount:/testmount:Z --cap-add sys_admin -p 25:10000 -t -i 
 | --privileged | Full |
 | -p | Full |
 | --cap-add | Full |
+| --name | Full |
+| --hostname | Full |
 
 ## License
 
