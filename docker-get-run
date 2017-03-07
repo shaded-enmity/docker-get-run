@@ -1,0 +1,141 @@
+#!/usr/bin/env python3
+
+from docker import from_env
+from argparse import ArgumentParser
+
+
+__conn = from_env(version='auto')
+
+
+def inspect_container(container):
+    return __conn.api.inspect_container(container=container)
+
+
+def inspect_image(image):
+    return __conn.api.inspect_image(image=image)
+
+
+def get_value(obj, pathspec, default=None):
+    if '.' not in pathspec and pathspec not in obj:
+        return default
+    bound = obj
+    for item in pathspec.split('.'):
+        if item in bound:
+            bound = bound[item]
+        else:
+            return default
+    return bound or default
+
+
+def get_multiple(obj, *specs):
+    ret = []
+    for spec in specs:
+        ret.append(get_value(obj, spec))
+    return ret
+
+
+class CommandBuilder:
+    def __init__(self):
+        self._state = []
+        self._cmd = None
+        self._image = None
+
+    def emit_volume(self, data):
+        for mount in data:
+            self._state += ['-v', mount]
+
+    def emit_cmd(self, cmd):
+        self._cmd = cmd
+
+    def emit_cap_add(self, caps):
+        for cap in caps:
+            self._state += ['--cap-add', cap]
+
+    def emit_cap_drop(self, caps):
+        for cap in caps:
+            self._state += ['--cap-add', cap]
+
+    def emit_port_bindings(self, bindings):
+        for cp, data in bindings.items():
+            self._state += ['-p', '{}:{}'.format(data[0]['HostPort'], cp[:cp.find('/')])]
+
+    def emit_tty(self, value):
+        if value:
+            self._state += ['-t']
+
+    def emit_interactive(self, value):
+        if value:
+            self._state += ['-i']
+
+    def emit_detach(self, value):
+        if value:
+            self._state += ['-d']
+
+    def emit_attach(self, attachments):
+        streams = ['STDERR', 'STDIN', 'STDOUT']
+        for stream, value in zip(streams, attachments):
+            if value:
+                self._state += ['-a', stream]
+
+    def emit_privileged(self, privileged):
+        if privileged:
+            self._state += ['--privileged']
+
+    def emit_links(self, links):
+        for link in links:
+            self._state += ['--link', link.rsplit('/', 1)[1]]
+
+    def emit_memory(self, value):
+        mb = 1024**2
+        if value > mb:
+            self._state += ['-m', '{}M'.format(value // mb)]
+
+    def emit_env(self, image, env):
+        default = set(get_value(inspect_image(image), 'Config.Env', []))
+        for e in (set(env) - default):
+            self._state += ['-e', e]
+
+    def emit_image(self, image):
+        self._image = image
+
+    def build(self):
+        flags = ' '.join(self._state)
+        cmd = ' '.join(self._cmd)
+        return 'docker run {flags} {image} {command}'.format(flags=flags, image=self._image, command=cmd)
+
+
+ap = ArgumentParser()
+ap.add_argument('-v', '--version', default=False, action='store_true')
+ap.add_argument('container')
+parsed = ap.parse_args()
+if parsed.version:
+    print('docker-get-run v0.1')
+    exit(0)
+
+data = inspect_container(parsed.container)
+
+builder = CommandBuilder()
+
+builder.emit_privileged(get_value(data, 'HostConfig.Privileged', False))
+builder.emit_cmd(get_value(data, 'Config.Cmd', ''))
+builder.emit_volume(get_value(data, 'HostConfig.Binds', []))
+builder.emit_cap_add(get_value(data, 'HostConfig.CapAdd', []))
+builder.emit_port_bindings(get_value(data, 'HostConfig.PortBindings', {}))
+builder.emit_image(get_value(data, 'Config.Image', ''))
+if get_value(data, 'Config.Tty'):
+    builder.emit_tty(True)
+
+stdio_flags = get_multiple(data, 'Config.OpenStdin', 'Config.StdinOnce')
+stdio = get_multiple(data, 'Config.AttachStderr', 'Config.AttachStdin', 'Config.AttachStdout')
+if all(stdio) and all(stdio_flags):
+    builder.emit_interactive(True)
+elif any(stdio):
+    builder.emit_attach(stdio)
+else:
+    builder.emit_detach(True)
+
+builder.emit_links(get_value(data, 'HostConfig.Links', []))
+builder.emit_memory(get_value(data, 'HostConfig.Memory', 0))
+builder.emit_env(get_value(data, 'Image', ''), get_value(data, 'Config.Env', []))
+
+print(builder.build())
