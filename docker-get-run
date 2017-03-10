@@ -15,27 +15,32 @@ def inspect_image(image):
     return __conn.api.inspect_image(image=image)
 
 
-def get_value(obj, pathspec, default=None):
+def get_value(obj, pathspec, default=None, strict=False):
     if '.' not in pathspec and pathspec not in obj:
+        if strict:
+            raise ValueError('pathspec: "{}" is invalid'.format(pathspec))
         return default
     bound = obj
     for item in pathspec.split('.'):
         if item in bound:
             bound = bound[item]
         else:
+            if strict:
+                raise ValueError('pathspec: "{}" is invalid'.format(pathspec))
             return default
     return bound or default
 
 
-def get_multiple(obj, *specs):
+def get_multiple(obj, *specs, strict=False):
     ret = []
     for spec in specs:
-        ret.append(get_value(obj, spec))
+        ret.append(get_value(obj, spec, strict=strict))
     return ret
 
 
 class CommandBuilder:
-    def __init__(self):
+    def __init__(self, strict=False):
+        self._strict = strict
         self._state = []
         self._cmd = None
         self._image = None
@@ -47,6 +52,18 @@ class CommandBuilder:
     def emit_cmd(self, cmd):
         self._cmd = cmd
 
+    def emit_device(self, devices):
+        for device in devices:
+            try:
+                simple = (device['PathOnHost'] == device['PathInContainer']) and device['CgroupPermissions'] == 'rwm'
+                if simple:
+                    self._state += ['--device', device['PathOnHost']]
+                else:
+                    self._state += ['--device', '{PathOnHost}:{PathInContainer}:{CgroupPermissions}'.format(**device)]
+            except KeyError as ke:
+                if self._strict:
+                    raise ValueError('Key {} not found in device specification:\n{}'.format(ke.args[0], device)) from ke
+
     def emit_cap_add(self, caps):
         for cap in caps:
             self._state += ['--cap-add', cap]
@@ -57,7 +74,14 @@ class CommandBuilder:
 
     def emit_port_bindings(self, bindings):
         for cp, data in bindings.items():
-            self._state += ['-p', '{}:{}'.format(data[0]['HostPort'], cp[:cp.find('/')])]
+            try:
+                self._state += ['-p', '{}:{}'.format(data[0]['HostPort'], cp[:cp.find('/')])]
+            except (KeyError, IndexError) as e:
+                if self._strict:
+                    if isinstance(e, KeyError):
+                        raise ValueError('Key {} not found in:\n{}'.format(ke.args[0], data[0])) from e
+                    elif isinstance(e, IndexError):
+                        raise ValueError('Index {} not found in:\n{}'.format(ke.args[0], (cp, data))) from e
 
     def emit_tty(self, value):
         if value:
@@ -112,6 +136,7 @@ class CommandBuilder:
 
 ap = ArgumentParser()
 ap.add_argument('-v', '--version', default=False, action='store_true')
+ap.add_argument('-s', '--strict', default=False, help='perform stricter validation of input data', action='store_true')
 ap.add_argument('container')
 parsed = ap.parse_args()
 if parsed.version:
@@ -120,7 +145,7 @@ if parsed.version:
 
 data = inspect_container(parsed.container)
 
-builder = CommandBuilder()
+builder = CommandBuilder(strict=parsed.strict)
 
 builder.emit_privileged(get_value(data, 'HostConfig.Privileged', False))
 builder.emit_cmd(get_value(data, 'Config.Cmd', ''))
@@ -151,5 +176,6 @@ if hostname not in container_id:
     builder.emit_hostname(hostname)
 
 builder.emit_name(get_value(data, 'Name'))
+builder.emit_device(get_value(data, 'HostConfig.Devices'))
 
 print(builder.build())
