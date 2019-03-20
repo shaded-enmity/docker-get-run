@@ -1,18 +1,14 @@
 #!/usr/bin/env python3
 
-from docker import from_env
+#from docker import from_env
 from argparse import ArgumentParser
-
-
-__conn = from_env(version='auto')
-
-
-def inspect_container(container):
-    return __conn.api.inspect_container(container=container)
+import sys
+import json
+import subprocess
 
 
 def inspect_image(image):
-    return __conn.api.inspect_image(image=image)
+    return json.loads(subprocess.check_output(['docker', 'inspect', image]))
 
 
 def get_value(obj, pathspec, default=None, strict=False):
@@ -47,7 +43,13 @@ class CommandBuilder:
 
     def emit_volume(self, data):
         for mount in data:
-            self._state += ['-v', mount]
+            if isinstance(mount, dict):
+                if get_value(mount, 'Type') == 'volume' and get_value(mount, 'Driver') == 'local':
+                    self._state += ['-v', '{Source}:{Destination}{rw}'.format(
+                        **mount, rw=':rw' if mount['RW'] else ''
+                    )]
+            else:
+                self._state += ['-v', mount]
 
     def emit_cmd(self, cmd):
         self._cmd = cmd
@@ -115,7 +117,7 @@ class CommandBuilder:
             self._state += ['-m', '{}M'.format(value // mb)]
 
     def emit_env(self, image, env):
-        default = set(get_value(inspect_image(image), 'Config.Env', []))
+        default = set(get_value(inspect_image(image)[0], 'Config.Env', []))
         for e in (set(env) - default):
             self._state += ['-e', e]
 
@@ -137,19 +139,18 @@ class CommandBuilder:
 ap = ArgumentParser()
 ap.add_argument('-v', '--version', default=False, action='store_true')
 ap.add_argument('-s', '--strict', default=False, help='perform stricter validation of input data', action='store_true')
-ap.add_argument('container')
+
 parsed = ap.parse_args()
 if parsed.version:
     print('docker-get-run v0.1')
     exit(0)
 
-data = inspect_container(parsed.container)
-
+data = json.load(sys.stdin)[0]
 builder = CommandBuilder(strict=parsed.strict)
 
 builder.emit_privileged(get_value(data, 'HostConfig.Privileged', False))
 builder.emit_cmd(get_value(data, 'Config.Cmd', ''))
-builder.emit_volume(get_value(data, 'HostConfig.Binds', []))
+builder.emit_volume(get_value(data, 'HostConfig.Binds', []) + get_value(data, 'Mounts', []))
 builder.emit_cap_add(get_value(data, 'HostConfig.CapAdd', []))
 builder.emit_cap_drop(get_value(data, 'HostConfig.CapDrop', []))
 builder.emit_port_bindings(get_value(data, 'HostConfig.PortBindings', {}))
@@ -176,6 +177,6 @@ if hostname not in container_id:
     builder.emit_hostname(hostname)
 
 builder.emit_name(get_value(data, 'Name'))
-builder.emit_device(get_value(data, 'HostConfig.Devices'))
+builder.emit_device(get_value(data, 'HostConfig.Devices', []))
 
 print(builder.build())
