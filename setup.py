@@ -5,7 +5,7 @@ setuptools.setup(
     version = '0.1',
     packages = setuptools.find_packages(),
     scripts = ['docker-get-run'],
-    install_requires = ['docker'],
+    install_requires = [],
     package_data = {
         '': ['LICENSE', 'README.md']
     },

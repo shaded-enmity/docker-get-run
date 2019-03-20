@@ -35,7 +35,8 @@ def get_multiple(obj, *specs, strict=False):
 
 
 class CommandBuilder:
-    def __init__(self, strict=False):
+    def __init__(self, strict=False, podman=False):
+        self._podman = podman
         self._strict = strict
         self._state = []
         self._cmd = None
@@ -133,12 +134,14 @@ class CommandBuilder:
     def build(self):
         flags = ' '.join(self._state)
         cmd = ' '.join(self._cmd)
-        return 'docker run {flags} {image} {command}'.format(flags=flags, image=self._image, command=cmd)
+        ce = 'podman' if self._podman else 'docker'
+        return '{ce} run {flags} {image} {command}'.format(flags=flags, image=self._image, command=cmd, ce=ce)
 
 
 ap = ArgumentParser()
 ap.add_argument('-v', '--version', default=False, action='store_true')
 ap.add_argument('-s', '--strict', default=False, help='perform stricter validation of input data', action='store_true')
+ap.add_argument('-p', '--podman', default=True, action='store_true', help='Emit podman command')
 
 parsed = ap.parse_args()
 if parsed.version:
@@ -146,7 +149,7 @@ if parsed.version:
     exit(0)
 
 data = json.load(sys.stdin)[0]
-builder = CommandBuilder(strict=parsed.strict)
+builder = CommandBuilder(strict=parsed.strict, podman=parsed.podman)
 
 builder.emit_privileged(get_value(data, 'HostConfig.Privileged', False))
 builder.emit_cmd(get_value(data, 'Config.Cmd', ''))
